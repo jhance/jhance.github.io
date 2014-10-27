@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>Ramblings</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/syntax.css" />
+        <script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    </head>
+    <body>
+        <div id="header">
+            <div id="logo">
+                <a href="../">Ramblings</a>
+            </div>
+            <div id="navigation">
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../contact.html">Contact</a>
+                <a href="../archive.html">Archive</a>
+            </div>
+        </div>
+
+        <div id="content">
+            <h1>Lens-based configuration for Yi</h1>
+
+            <div class="info">
+    Posted on October 27, 2014
+    
+        by Jared Hance
+    
+</div>
+
+<p>The example yi configuration for yi looks something like this.</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">main ::</span> <span class="dt">IO</span> ()
+main <span class="fu">=</span> yi <span class="fu">$</span> defaultVimConfig {
+    modeTable <span class="fu">=</span> myModes <span class="fu">++</span> modeTable defaultVimConfig,
+    defaultKm <span class="fu">=</span> myKeymapSet,
+    configCheckExternalChangesObsessively <span class="fu">=</span> <span class="dt">False</span>
+}</code></pre>
+<p>Here, <code>defaultVimConfig</code> has type <code>Config</code>, which contains all of the basic fields needed by Yi to boot. However, <code>Config</code> obviously does not contain a record for every single configuration variable that we could want. In fact, its debatable that the above <code>configCheckExternalChangesObsessively</code> should not even be a record of <code>Config</code>.</p>
+<p>At the moment, there isn’t a particularly large amount of configuration variables available. As an example of how the whole system works, I’ll be showing the implementation of a fairly simple one I recently implemented, and how to fairly idiomatically install it into the yi configuration.</p>
+<p>First, take a look at the following two typeclasses.</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="kw">class</span> (<span class="dt">Default</span> a, <span class="dt">Binary</span> a, <span class="dt">Typeable</span> a) <span class="ot">=&gt;</span> <span class="dt">YiVariable</span> a
+<span class="kw">class</span> (<span class="dt">Default</span> a, <span class="dt">Typeable</span> a) <span class="ot">=&gt;</span> <span class="dt">YiConfigVariable</span> a</code></pre>
+<p>Now, it turns out that we are only interested in <code>YiConfigVariable</code> but it is useful to understand the difference between these two types. The <code>YiVariable</code> has an extra requirement - it must be an instance of <code>Binary</code>. This is because a <code>YiVariable</code> is essentially dynamic editor-local state, and is stored in the <code>Editor</code> which is itself serializable. The <code>:reload</code> cycle serializes the editor, reboots, and then deserializes the editor to bring back the current state. Thus any custom dynamic state variables have to themselves be serializable.</p>
+<p><code>Config</code> does not share this, since it is loaded at the start of the boot cycle and not persisted across reboots. Since <code>YiConfigVariable</code>s are actually part of the <code>Config</code> datatype (specifically, a record called <code>configVars</code>), they don’t need a <code>Binary</code> instance. The <code>Default</code> requirement just means that it has to implement <code>def :: Default a =&gt; a</code>, which provides a default value for that configuration variable.</p>
+<p>I previously mentioned the record <code>configVars</code> offhandedly, but its not completely trivial. It has type <code>DynamicState</code>, which is from a package associated with <code>Yi</code>. Essentially all <code>YiConfigVariables</code> are stored in this <code>DynamicState</code> record.</p>
+<p>To understand how <code>YiConfigVariable</code>s interact with <code>configVars</code>, we must first look at <code>customVariable</code>. Well, <code>customVariable</code> actually has a pretty boring definition:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">customVariable ::</span> <span class="dt">YiConfigVariable</span> a <span class="ot">=&gt;</span> <span class="dt">Field</span> a
+customVariable <span class="fu">=</span> configVariable</code></pre>
+<p>Okay, so <code>customVariable</code> is just <code>configVariable</code>, but we see a new type here. Well, that type is also pretty boring:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="kw">type</span> <span class="dt">Field</span> a <span class="fu">=</span> <span class="dt">Lens'</span> <span class="dt">Config</span> a</code></pre>
+<p>So a field is just a lens that focuses from a config to something glese, but in this case since we are creating them with <code>customVariable</code> they must be focusing onto some yi config variable.</p>
+<p>Now lets see what <code>customVariable</code> is actually doing. The definition is not defined in terms of <code>Field</code> but in times of <code>Lens'</code> (actually its defined in terms of <code>Lens</code> but I prefer to use the simpler <code>Lens'</code>)</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">configVariable ::</span> <span class="dt">YiConfigVariable</span> a <span class="ot">=&gt;</span> <span class="dt">Lens'</span> <span class="dt">Config</span> a
+configVariable <span class="fu">=</span> configVarsA <span class="fu">.</span> _dyn def</code></pre>
+<p>Okay, finally something a little less boring. First, <code>configVarsA</code> is a lens automically generated for us by <code>makeLensesWithSuffix</code>. Naturally, it is of type <code>Lens' Config DynamicState</code>. This immediately tells us that <code>_dyn def</code> must be of type <code>Lens' DynamicState a</code> (which might not be immediately obvious if you check out the documentation on hackage, unless you know a bit about how Lens actually work). Thus, a more human-readable type for <code>_dyn</code> than what is provided in the documentation would be</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell">_<span class="ot">dyn ::</span> <span class="dt">Typeable</span> a <span class="ot">=&gt;</span> a <span class="ot">-&gt;</span> <span class="dt">Lens'</span> <span class="dt">DynamicState</span> a</code></pre>
+<p>Recall that <code>YiConfigVariable a</code> implies <code>Typeable a</code> so this is all good for us. Also remember that we know that <code>a</code> has a default value, <code>def</code>, which is the first argument to <code>_dyn</code>. <code>_dyn</code> clearly needs a default value, since it is required to return something, that is, it is not <code>Lens' DynamicState (Maybe a)</code> which would be more cumbersome.</p>
+<p>We finally have the prerequisites to understand a basic configuration variable. Take a look:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="kw">newtype</span> <span class="dt">PersistentSearch</span> <span class="fu">=</span> <span class="dt">PersisentSearch</span>
+        { _<span class="ot">unPersisentSearch ::</span> <span class="dt">Bool</span> }
+    <span class="kw">deriving</span>(<span class="dt">Typeable</span>, <span class="dt">Binary</span>)
+
+<span class="kw">instance</span> <span class="dt">Default</span> <span class="dt">PersisentSearch</span> <span class="kw">where</span>
+    def <span class="fu">=</span> <span class="dt">PersisentSearch</span> <span class="dt">True</span>
+
+<span class="kw">instance</span> <span class="dt">YiConfigVariable</span> <span class="dt">PersistentSearch</span>
+
+makeLenses <span class="ch">''</span><span class="dt">PersistentSearch</span>
+
+<span class="ot">persistentSearch ::</span> <span class="dt">Field</span> <span class="dt">Bool</span>
+persistentSearch <span class="fu">=</span> customVariable <span class="fu">.</span> unPersistentSearch</code></pre>
+<p>The first few lines of this are relatively simple, we are just providing instances for everything. (Do we need to provide an instance for <code>Binary</code>? Probably not). The default value of <code>PersisentSearch</code> is <code>PersistentSearch True</code>. Notice that the whole thing is a newtype, because each variable must itself be its own type. But we don’t want the user to deal with this, which is why the only thing they need care about is <code>persisentSearch</code> which doesn’t disclose anything about the actual datatype at all in its definition.</p>
+<p>And what is <code>persisentSearch</code> doing? Well, its just composing a lens that focuses from <code>Config</code> to <code>PersisentSearch</code> with the trivial lens that focuses from <code>PersistentSearch</code> to the <code>Bool</code> that it contains, yielding a lens that focuses from <code>Config</code> to <code>Bool</code>, but more specifically the <code>Bool</code> that we are interested in.</p>
+<p>And thus we can integrate this into our configuration. I’ve played with a few ways to do this. We provide a <code>runConfig</code> or something like that but it uses a <code>StateT</code> over <code>IO</code>, and I don’t yet need <code>IO</code> in my configuration, so I prefer to use a <code>StateT</code> over <code>Identity</code>, which, of course, is just <code>State</code>. Thus I get</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">main ::</span> <span class="dt">IO</span> ()
+main <span class="fu">=</span> yi <span class="fu">.</span> flip execState defaultVimConfig <span class="fu">$</span> <span class="kw">do</span>
+    <span class="co">-- core</span>
+    defaultKmA <span class="fu">.=</span> myKeymapSet
+    modeTableA <span class="fu">&lt;&gt;=</span> myModes
+    <span class="co">-- config vars</span>
+    persistentSearch <span class="fu">.=</span> <span class="dt">False</span></code></pre>
+<p>Which, even for the case where we only need records, is perhaps slightly more elegant because <code>&lt;&gt;=</code> is slightly nicer than showing both an explicity set and view.</p>
+
+        </div>
+        <div id="footer">
+            Site proudly generated by
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </div>
+    </body>
+</html>
