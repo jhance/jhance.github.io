@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>Ramblings</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/syntax.css" />
+        <script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    </head>
+    <body>
+        <div id="header">
+            <div id="logo">
+                <a href="../">Ramblings</a>
+            </div>
+            <div id="navigation">
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../contact.html">Contact</a>
+                <a href="../archive.html">Archive</a>
+            </div>
+        </div>
+
+        <div id="content">
+            <h1>Useful compositions in Haskell</h1>
+
+            <div class="info">
+    Posted on November  1, 2014
+    
+        by Jared Hance
+    
+</div>
+
+<p>A lot of functions behave relatively nice when composed with itself. A great first example is just <code>map</code>. It is useful to know many of these off the top of your head, because they make certain patterns extremely easy. Consider an extremely simple example, <code>map</code>. It is pretty well known that <code>map (f . g) = map f . map g</code>, but there is perhaps an even more useful and more simple composition:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">y ::</span> (a <span class="ot">-&gt;</span> b) <span class="ot">-&gt;</span> [[a]] <span class="ot">-&gt;</span> [[b]]
+y <span class="fu">=</span> map <span class="fu">.</span> map</code></pre>
+<p>Okay, so thats nice. We can generalize map, using itself, to lists of <code>n</code>-th degree just by composing it with itself <code>n</code> times. But this seems somewhat limited, so lets try a more familiar function. We might guess that</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell">y <span class="fu">:?</span> <span class="dt">Functor</span> f <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> b) <span class="ot">-&gt;</span> f (f a) <span class="ot">-&gt;</span> f (f b)
+y <span class="fu">=</span> fmap <span class="fu">.</span> fmap</code></pre>
+<p>And while its true that we can indeed give that function the above type signature, its more useful to use the most general one:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">y ::</span> (<span class="dt">Functor</span> f1, <span class="dt">Functor</span> f2)
+     <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> b) <span class="ot">-&gt;</span> f1 (f2 a) <span class="ot">-&gt;</span> f1 (f2 b)
+y <span class="fu">=</span> fmap <span class="fu">.</span> fmap</code></pre>
+<p>so <code>fmap</code> composes just like <code>map</code> does, except the functors <em>don’t even need to be the same</em>. This is extremely useful when mixing containers. For example, consider a <code>Vector [a]</code> (why would you need such a structure? who knows). But you could certainly map over the <code>a</code>s within this vector of lists using <code>fmap . fmap</code> and not have to care at all about the two underlying structures.</p>
+<p>Since we can generalize this to <code>fmap</code>, we can also consider generalizing it to another generalization of <code>map</code>, that is, <code>mapM</code>. This composition also behaves exactly as we expect:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">y ::</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> m b) <span class="ot">-&gt;</span> [[a]] <span class="ot">-&gt;</span> m [[b]]<span class="ot">`</span>
+<span class="ot">y = mapM . mapM</span></code></pre>
+<p>So unlike <code>fmap</code>, we have to keep the monad constant here. This is because the monad and functors are playing different roles. If we consider instead <code>Data.Traversable.mapM</code>, we see something similar to <code>fmap</code>:</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">y ::</span> (<span class="dt">Monad</span> m, <span class="dt">Traversable</span> t1, <span class="dt">Traversable</span> t2)
+     <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> m b) <span class="ot">-&gt;</span> t1 (t2 a) <span class="ot">-&gt;</span> m (t1 (t2 a))
+y <span class="fu">=</span> Data.Traversable.mapM <span class="fu">.</span> Data.Traversable.mapM</code></pre>
+<p>So just like with the <code>fmap . fmap</code> case, we don’t need use the same traversable, which means that of course this could be used with our <code>Vector [a]</code>.</p>
+<p>Sometimes, its important to know <em>how</em> to self-compose the function. For example, <code>replicateM . replicateM</code> is completely useless. However, <code>replicateM j . replicateM k</code> turns out to be useful for generating something like a random grid. If <code>rand :: Int -&gt; IO Int</code> is a random indicator with parameter <code>p</code> then, then we can use</p>
+<pre class="sourceCode haskell"><code class="sourceCode haskell"><span class="ot">y ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> [[<span class="dt">Int</span>]]
+y j k <span class="fu">=</span> replicateM j <span class="fu">.</span> replicateM k <span class="fu">.</span> rand</code></pre>
+<p>Nice, not only did we not have to do much work (unlike the other answers on stack overflow…), we even dropped a point.</p>
+
+        </div>
+        <div id="footer">
+            Site proudly generated by
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </div>
+    </body>
+</html>
